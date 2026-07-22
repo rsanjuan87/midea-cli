@@ -110,6 +110,28 @@ by hand; the first run generates it for you.
 | `poll 30`       | change background sampling interval (seconds)      |
 | `quit`          | exit                                              |
 
+## Scripting / non-interactive use
+
+Any command above also runs straight from your shell — no REPL, no TTY needed:
+
+```bash
+midea on
+midea mode cool
+midea status
+midea off
+```
+
+Each call connects, runs that one command, prints its result, and exits —
+handy for cron, `launchd`, Shortcuts, or a wrapper script. `midea` with no
+arguments still opens the interactive shell (or, with no TTY, prints status
+once and exits, as before).
+
+Exit code is non-zero if the command errors, so scripts can check it.
+
+Note: `timer`, `smart`, and `poll <n>` report their result but don't keep
+running afterwards — their effect depends on a background task that ends
+when the process does. Use the interactive shell for those.
+
 ## The chart
 
 A background poller samples the unit every `poll_interval` seconds (default 60)

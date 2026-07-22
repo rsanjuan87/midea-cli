@@ -424,7 +424,10 @@ HELP = """\
   smart off           disable smart mode
   poll <seconds>      change background sampling interval
   help                show this help
-  quit / exit         leave the app\
+  quit / exit         leave the app
+
+[dim]Tip: any of the above also runs directly from your shell, e.g.
+`midea status` or `midea mode cool` — runs once and exits.[/dim]\
 """
 
 MODE_MAP = {
@@ -799,7 +802,7 @@ class Controller:
 # --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
-async def main():
+async def main(command: str | None = None):
     cfg = load_config()
     if cfg is None:
         cfg = await setup_device()
@@ -816,14 +819,32 @@ async def main():
     record_sample(device)
 
     console.print(f"[green]Connected.[/green]")
-    show_status(device)
+    if command is None:
+        show_status(device)
 
-    # Headless (no TTY): show status, record a sample, and exit cleanly.
+    # Single-shot mode: `midea <command...>` (e.g. `midea on`, `midea mode
+    # cool`, `midea status`) runs exactly one command through the same
+    # handler the interactive shell uses, then exits — no REPL, no TTY
+    # required. Every command in `help` works here too, except that `timer`,
+    # `smart`, and `poll <n>` only report their result: their effect relies
+    # on a background task that can't outlive this process once it exits.
+    if command is not None:
+        try:
+            await ctrl.handle(command)
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+            sys.exit(1)
+        ctrl.cancel_timer()
+        ctrl.stop_smart()
+        return
+
+    # Headless (no TTY, no explicit command): show status, record a sample,
+    # and exit cleanly.
     if not sys.stdin.isatty():
         console.print(
             "\n[yellow]No interactive terminal detected[/yellow] — showed status and "
             "recorded a sample.\nRun this in a real terminal (Terminal.app / iTerm) "
-            "for the command prompt."
+            "for the command prompt, or pass a command directly, e.g. `midea status`."
         )
         return
 
@@ -855,9 +876,22 @@ async def main():
 
 
 def cli() -> None:
-    """Console-script entry point (`midea`), wired up in pyproject.toml."""
+    """Console-script entry point (`midea`), wired up in pyproject.toml.
+
+    No arguments  -> interactive shell (unchanged).
+    Arguments     -> run one command non-interactively and exit, e.g.:
+                       midea on
+                       midea mode cool
+                       midea status
+                     Supports every command `help` lists inside the shell.
+    """
+    args = sys.argv[1:]
+    if args and args[0] in ("-h", "--help"):
+        console.print(f"Usage: midea [COMMAND [ARGS...]]\n\n{HELP}")
+        return
+    command = " ".join(args) if args else None
     try:
-        asyncio.run(main())
+        asyncio.run(main(command))
     except KeyboardInterrupt:
         pass
 
