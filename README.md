@@ -128,9 +128,9 @@ once and exits, as before).
 
 Exit code is non-zero if the command errors, so scripts can check it.
 
-Note: `timer`, `smart`, and `poll <n>` report their result but don't keep
-running afterwards — their effect depends on a background task that ends
-when the process does. Use the interactive shell for those.
+Note: `smart` and `timer` keep the process running to do their job — `smart`
+until you press Ctrl+C, `timer` until it fires (or Ctrl+C cancels it early).
+`poll <n>` just sets a value, so it reports and exits immediately as before.
 
 ## The chart
 

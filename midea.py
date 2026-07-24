@@ -23,6 +23,7 @@ import csv
 import os
 import re
 import readline  # noqa: F401 — importing it gives input() arrow-key history & line editing
+import signal
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -802,6 +803,47 @@ class Controller:
 # --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
+async def _run_until_interrupted(task: asyncio.Task, note: str) -> None:
+    """Await a background task (smart/timer), letting Ctrl+C stop it early.
+
+    A single-shot CLI call (e.g. `midea smart 25`) starts smart/timer's
+    background task and then returns immediately by default, which would
+    tear the task down before it does anything. This keeps the process
+    alive instead, until the task ends on its own (timer firing) or the
+    user hits Ctrl+C (smart's only way to stop, since it has no end state).
+    """
+    console.print(note)
+    loop = asyncio.get_running_loop()
+    stop = asyncio.Event()
+    have_handler = True
+    try:
+        loop.add_signal_handler(signal.SIGINT, stop.set)
+    except NotImplementedError:
+        have_handler = False  # e.g. Windows — fall back to plain await below
+
+    if not have_handler:
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return
+
+    stop_wait = asyncio.create_task(stop.wait())
+    try:
+        done, _ = await asyncio.wait({task, stop_wait}, return_when=asyncio.FIRST_COMPLETED)
+        if stop_wait in done and task not in done:
+            console.print("\n[yellow]Interrupted.[/yellow]")
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+    finally:
+        loop.remove_signal_handler(signal.SIGINT)
+        if not stop_wait.done():
+            stop_wait.cancel()
+
+
 async def main(command: str | None = None):
     cfg = load_config()
     if cfg is None:
@@ -825,17 +867,35 @@ async def main(command: str | None = None):
     # Single-shot mode: `midea <command...>` (e.g. `midea on`, `midea mode
     # cool`, `midea status`) runs exactly one command through the same
     # handler the interactive shell uses, then exits — no REPL, no TTY
-    # required. Every command in `help` works here too, except that `timer`,
-    # `smart`, and `poll <n>` only report their result: their effect relies
-    # on a background task that can't outlive this process once it exits.
+    # required. `smart` and `timer` are the exceptions: they hand off to a
+    # background task, so the process stays alive to run it — `smart` until
+    # Ctrl+C, `timer` until it fires (or Ctrl+C cancels it early). `poll <n>`
+    # only sets a value, so it still reports and exits immediately.
     if command is not None:
         try:
             await ctrl.handle(command)
         except Exception as e:
             console.print(f"[red]Error: {e}[/red]")
             sys.exit(1)
-        ctrl.cancel_timer()
-        ctrl.stop_smart()
+
+        if ctrl.smart_task is not None:
+            try:
+                await _run_until_interrupted(
+                    ctrl.smart_task, "[dim]Smart mode running — Ctrl+C to stop.[/dim]"
+                )
+            finally:
+                ctrl.stop_smart()
+        elif ctrl.timer_task is not None:
+            try:
+                await _run_until_interrupted(
+                    ctrl.timer_task,
+                    f"[dim]Timer armed — turns off {ctrl.timer_desc}. Ctrl+C to cancel early.[/dim]",
+                )
+            finally:
+                ctrl.cancel_timer()
+        else:
+            ctrl.cancel_timer()
+            ctrl.stop_smart()
         return
 
     # Headless (no TTY, no explicit command): show status, record a sample,
