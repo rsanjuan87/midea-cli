@@ -1,0 +1,108 @@
+diff --git a/midea.py b/midea.py
+index 603da19..a1f9797 100644
+--- a/midea.py
++++ b/midea.py
+@@ -9,6 +9,7 @@ Launch it once and type commands:
+   status                show a table of the current state
+   chart [hours]         plot outdoor / home / target temp over time (default 6h)
+   poll 30               change the background sampling interval (seconds)
++  rescan                re-discover the unit on the LAN and refresh config.json
+   help                  list commands
+   quit                  exit
+ 
+@@ -427,6 +428,7 @@ HELP = """\
+                         (echoes temps each cycle so you needn't run status)
+   smart off             disable smart mode
+   poll <seconds>        change background sampling interval
++  rescan                re-discover the unit on the LAN and refresh config.json
+   help                  show this help
+   quit / exit           leave the app
+ 
+@@ -749,10 +751,47 @@ class Controller:
+             await self._handle_timer(args)
+         elif cmd == "smart":
+             await self._handle_smart(args)
++        elif cmd == "rescan":
++            await self._handle_rescan()
+         else:
+             console.print(f"Unknown command: {cmd}. Type 'help'.")
+         return True
+ 
++    async def _handle_rescan(self):
++        """Re-discover the unit on the LAN and hot-swap the connection.
++
++        This replaces the old "delete config.json by hand and re-run" dance:
++        setup_device() already overwrites config.json with the fresh
++        ip/id/token/key, we just also need to point this running session at
++        the newly-discovered device instead of the stale one.
++        """
++        console.print("[cyan]Rescanning the LAN for the unit…[/cyan]")
++        try:
++            new_cfg = await setup_device()
++        except SystemExit:
++            console.print(
++                "[red]Rescan failed — keeping the existing configuration.[/red]"
++            )
++            return
++
++        try:
++            async with self.io_lock:
++                new_device = await connect(new_cfg)
++        except Exception as e:
++            console.print(
++                f"[red]Rescan found a unit but could not connect: {e}[/red]\n"
++                "Keeping the existing configuration."
++            )
++            return
++
++        self.device = new_device
++        self.cfg = new_cfg
++        self.poll_interval = new_cfg.get("poll_interval", self.poll_interval)
++        console.print(
++            f"[green]Reconnected to {new_cfg.get('name', 'AC')} at {new_cfg['ip']}.[/green]"
++        )
++        show_status(self.device)
++
+     async def _handle_timer(self, args: list[str]):
+         usage = (
+             "usage: timer <30m|1h30m|HH:MM>     turn off after that time\n"
+@@ -856,22 +895,36 @@ async def _run_until_interrupted(task: asyncio.Task, note: str) -> None:
+ 
+ 
+ async def main(command: str | None = None):
+-    cfg = load_config()
+-    if cfg is None:
++    # `midea rescan` forces fresh LAN discovery instead of trusting a
++    # possibly-stale config.json (e.g. after the AC's IP changed) — no more
++    # deleting the file by hand before re-running.
++    force_rescan = command is not None and command.strip().lower() == "rescan"
++
++    if force_rescan:
+         cfg = await setup_device()
++    else:
++        cfg = load_config()
++        if cfg is None:
++            cfg = await setup_device()
+ 
+     console.print(f"[cyan]Connecting to {cfg.get('name','AC')} at {cfg['ip']}…[/cyan]")
+     try:
+         device = await connect(cfg)
+     except Exception as e:
+         console.print(f"[red]Could not connect: {e}[/red]")
+-        console.print("If the IP changed, delete config.json and re-run to rediscover.")
++        console.print("If the IP changed, run `midea rescan` to rediscover the unit.")
+         sys.exit(1)
+ 
+     ctrl = Controller(device, cfg)
+     record_sample(device)
+     console.print(f"[green]Connected.[/green]")
+ 
++    if force_rescan:
++        # The rescan itself *was* the requested command — nothing left to
++        # hand to ctrl.handle(), so behave like any other one-shot command.
++        show_status(device)
++        return
++
+     if command is None:
+         show_status(device)
+ 

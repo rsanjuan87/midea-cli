@@ -2,21 +2,20 @@
 """midea — an interactive CLI for a Midea (NetHome Plus) WiFi split AC.
 
 Launch it once and type commands:
-
-    on / off              power the unit on or off
-    temp 23               set target temperature
-    mode cool             set mode (cool|heat|auto|dry|fan)
-    fan auto              set fan speed (auto|low|medium|high|max|silent)
-    status                show a table of the current state
-    chart [hours]         plot outdoor / home / target temp over time (default 6h)
-    poll 30               change the background sampling interval (seconds)
-    help                  list commands
-    quit                  exit
+  on / off            power the unit on or off
+  temp 23              set target temperature
+  mode cool             set mode (cool|heat|auto|dry|fan)
+  fan auto              set fan speed (auto|low|medium|high|max|silent)
+  status                show a table of the current state
+  chart [hours]         plot outdoor / home / target temp over time (default 6h)
+  poll 30               change the background sampling interval (seconds)
+  rescan                re-discover the unit on the LAN and refresh config.json
+  help                  list commands
+  quit                  exit
 
 On first run it discovers the unit on your LAN and saves its
 ip/id/token/key to config.json next to this script.
 """
-
 import asyncio
 import atexit
 import csv
@@ -101,6 +100,7 @@ async def setup_device() -> dict:
         "the unit but cannot get a key, re-run and enter your NetHome Plus login\n"
         "(or set NETHOME_ACCOUNT / NETHOME_PASSWORD / AC_REGION env vars).\n"
     )
+
     region = _ask(
         "Region for the built-in account [US/DE/KR] (default US; EU/UK → DE): ",
         "US", "AC_REGION",
@@ -143,6 +143,7 @@ async def setup_device() -> dict:
             "enter your own NetHome Plus account (which works for any region)."
         )
         sys.exit(1)
+
     acs = [d for d in devices if isinstance(d, AC)]
     if not acs:
         console.print(
@@ -276,6 +277,7 @@ def parse_when(spec: str) -> tuple[float, str]:
         if target <= now:
             target += timedelta(days=1)
         return (target - now).total_seconds(), target.strftime("%H:%M")
+
     total = 0
     for num, unit in re.findall(r"(\d+)\s*([smh])", spec.lower()):
         total += int(num) * {"s": 1, "m": 60, "h": 3600}[unit]
@@ -356,6 +358,7 @@ def show_chart(hours: float) -> None:
     plt.title(f"Temperatures — last {hours:g}h")
     plt.xlabel("time")
     plt.ylabel("°C")
+
     for key, (label, ys) in series.items():
         if ys:
             plt.plot(times[key], ys, label=label, marker="braille")
@@ -365,6 +368,7 @@ def show_chart(hours: float) -> None:
         t_lo = min(temps)
         gap = max(0.5, (max(temps) - t_lo) * 0.12)
         off_y, on_y = t_lo - gap * 1.6, t_lo - gap * 0.6
+
         # Build a square step series so on/off periods read as flat bands of
         # the right width rather than diagonal ramps between samples.
         step_x, step_y = [], []
@@ -411,21 +415,22 @@ def show_chart(hours: float) -> None:
 # --------------------------------------------------------------------------- #
 HELP = """\
 [bold]Commands[/bold]
-  on / off            power the unit on or off
-  temp <n>            set target temperature (e.g. temp 23)
-  mode <m>            cool | heat | auto | dry | fan
-  fan <f>             auto | low | medium | high | max | silent
-  status              show current state
-  chart [hours]       plot outdoor / home / target temp (default 6)
-  timer <when>        turn off after 30m / 1h30m / HH:MM
-  timer cool 23 30m   set+on now, then off after that time
-  timer cancel        cancel a pending timer
-  smart <temp> [band] thermostat: on above temp+band, off at temp
-                      (echoes temps each cycle so you needn't run status)
-  smart off           disable smart mode
-  poll <seconds>      change background sampling interval
-  help                show this help
-  quit / exit         leave the app
+  on / off              power the unit on or off
+  temp <n>              set target temperature (e.g. temp 23)
+  mode <m>              cool | heat | auto | dry | fan
+  fan <f>               auto | low | medium | high | max | silent
+  status                show current state
+  chart [hours]         plot outdoor / home / target temp (default 6)
+  timer <when>          turn off after 30m / 1h30m / HH:MM
+  timer cool 23 30m     set+on now, then off after that time
+  timer cancel          cancel a pending timer
+  smart <temp> [band]   thermostat: on above temp+band, off at temp
+                        (echoes temps each cycle so you needn't run status)
+  smart off             disable smart mode
+  poll <seconds>        change background sampling interval
+  rescan                re-discover the unit on the LAN and refresh config.json
+  help                  show this help
+  quit / exit           leave the app
 
 [dim]Tip: any of the above also runs directly from your shell, e.g.
 `midea status` or `midea mode cool` — runs once and exits.[/dim]\
@@ -438,6 +443,7 @@ MODE_MAP = {
     "dry": AC.OperationalMode.DRY,
     "fan": AC.OperationalMode.FAN_ONLY,
 }
+
 FAN_MAP = {
     "auto": AC.FanSpeed.AUTO,
     "low": AC.FanSpeed.LOW,
@@ -456,9 +462,11 @@ class Controller:
         self.io_lock = asyncio.Lock()  # serialise all device I/O
         self.poll_interval = cfg.get("poll_interval", 60)
         self._stop = asyncio.Event()
+
         self.timer_task: asyncio.Task | None = None
         self.timer_fire_at: datetime | None = None
         self.timer_desc: str = ""
+
         # smart (software thermostat) loop
         self.smart_enabled = False
         self.smart_target: float | None = None
@@ -535,7 +543,7 @@ class Controller:
                 try:
                     async with self.io_lock:
                         await self.device.refresh()
-                    temp = self.device.indoor_temperature
+                        temp = self.device.indoor_temperature
                     if temp is not None:
                         await self._smart_step(float(temp))
                     record_sample(self.device)
@@ -577,7 +585,6 @@ class Controller:
         if not sys.stdout.isatty():
             console.print(status)
             return
-
         out = sys.stdout
         # \0337 save cursor · \033[1A up to the reserved blank line · \r\033[2K wipe
         # it · write the readings · \0338 restore cursor back onto the prompt line.
@@ -622,7 +629,7 @@ class Controller:
     async def _handle_smart(self, args: list[str]):
         usage = (
             "usage: smart <temp> [deadband]   hold home at/under temp by cycling on/off\n"
-            "       smart off                  disable smart mode"
+            "       smart off                 disable smart mode"
         )
         if not args:
             if self.smart_enabled:
@@ -634,6 +641,7 @@ class Controller:
             else:
                 console.print("Smart: off.\n" + usage)
             return
+
         if args[0].lower() == "off":
             if self.smart_enabled:
                 self.stop_smart()
@@ -641,11 +649,13 @@ class Controller:
             else:
                 console.print("Smart mode is not on.")
             return
+
         try:
             target = float(args[0])
         except ValueError:
             console.print("[red]smart: target must be a number[/red]\n" + usage)
             return
+
         deadband = 0.5
         if len(args) >= 2:
             try:
@@ -653,6 +663,7 @@ class Controller:
             except ValueError:
                 console.print("[red]smart: deadband must be a number[/red]")
                 return
+
         self.start_smart(target, deadband)
         console.print(
             f"Smart mode ON — holding home ≤ {target:g}°C "
@@ -740,15 +751,52 @@ class Controller:
             await self._handle_timer(args)
         elif cmd == "smart":
             await self._handle_smart(args)
+        elif cmd == "rescan":
+            await self._handle_rescan()
         else:
             console.print(f"Unknown command: {cmd}. Type 'help'.")
         return True
 
+    async def _handle_rescan(self):
+        """Re-discover the unit on the LAN and hot-swap the connection.
+
+        This replaces the old "delete config.json by hand and re-run" dance:
+        setup_device() already overwrites config.json with the fresh
+        ip/id/token/key, we just also need to point this running session at
+        the newly-discovered device instead of the stale one.
+        """
+        console.print("[cyan]Rescanning the LAN for the unit…[/cyan]")
+        try:
+            new_cfg = await setup_device()
+        except SystemExit:
+            console.print(
+                "[red]Rescan failed — keeping the existing configuration.[/red]"
+            )
+            return
+
+        try:
+            async with self.io_lock:
+                new_device = await connect(new_cfg)
+        except Exception as e:
+            console.print(
+                f"[red]Rescan found a unit but could not connect: {e}[/red]\n"
+                "Keeping the existing configuration."
+            )
+            return
+
+        self.device = new_device
+        self.cfg = new_cfg
+        self.poll_interval = new_cfg.get("poll_interval", self.poll_interval)
+        console.print(
+            f"[green]Reconnected to {new_cfg.get('name', 'AC')} at {new_cfg['ip']}.[/green]"
+        )
+        show_status(self.device)
+
     async def _handle_timer(self, args: list[str]):
         usage = (
-            "usage: timer <30m|1h30m|HH:MM>            turn off after that time\n"
-            "       timer <mode> <temp> <when>         set+on now, off after that time\n"
-            "       timer cancel                        cancel a pending timer"
+            "usage: timer <30m|1h30m|HH:MM>     turn off after that time\n"
+            "       timer <mode> <temp> <when>  set+on now, off after that time\n"
+            "       timer cancel                cancel a pending timer"
         )
         if not args:
             if self.timer_fire_at:
@@ -759,6 +807,7 @@ class Controller:
             else:
                 console.print("No timer set.\n" + usage)
             return
+
         if args[0].lower() == "cancel":
             if self.timer_fire_at:
                 self.cancel_timer()
@@ -793,6 +842,7 @@ class Controller:
         except ValueError as e:
             console.print(f"[red]timer: {e}[/red]\n" + usage)
             return
+
         self.set_off_timer(delay, desc)
         console.print(f"Will turn off {desc}.")
 
@@ -845,22 +895,36 @@ async def _run_until_interrupted(task: asyncio.Task, note: str) -> None:
 
 
 async def main(command: str | None = None):
-    cfg = load_config()
-    if cfg is None:
+    # `midea rescan` forces fresh LAN discovery instead of trusting a
+    # possibly-stale config.json (e.g. after the AC's IP changed) — no more
+    # deleting the file by hand before re-running.
+    force_rescan = command is not None and command.strip().lower() == "rescan"
+
+    if force_rescan:
         cfg = await setup_device()
+    else:
+        cfg = load_config()
+        if cfg is None:
+            cfg = await setup_device()
 
     console.print(f"[cyan]Connecting to {cfg.get('name','AC')} at {cfg['ip']}…[/cyan]")
     try:
         device = await connect(cfg)
     except Exception as e:
         console.print(f"[red]Could not connect: {e}[/red]")
-        console.print("If the IP changed, delete config.json and re-run to rediscover.")
+        console.print("If the IP changed, run `midea rescan` to rediscover the unit.")
         sys.exit(1)
 
     ctrl = Controller(device, cfg)
     record_sample(device)
-
     console.print(f"[green]Connected.[/green]")
+
+    if force_rescan:
+        # The rescan itself *was* the requested command — nothing left to
+        # hand to ctrl.handle(), so behave like any other one-shot command.
+        show_status(device)
+        return
+
     if command is None:
         show_status(device)
 
@@ -938,12 +1002,12 @@ async def main(command: str | None = None):
 def cli() -> None:
     """Console-script entry point (`midea`), wired up in pyproject.toml.
 
-    No arguments  -> interactive shell (unchanged).
-    Arguments     -> run one command non-interactively and exit, e.g.:
-                       midea on
-                       midea mode cool
-                       midea status
-                     Supports every command `help` lists inside the shell.
+    No arguments        -> interactive shell (unchanged).
+    Arguments           -> run one command non-interactively and exit, e.g.:
+                             midea on
+                             midea mode cool
+                             midea status
+                           Supports every command `help` lists inside the shell.
     """
     args = sys.argv[1:]
     if args and args[0] in ("-h", "--help"):
